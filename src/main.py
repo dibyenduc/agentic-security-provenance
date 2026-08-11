@@ -7,9 +7,12 @@ from pathlib import Path
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain_openai import ChatOpenAI
+#from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
 import requests
 from datetime import datetime, timedelta
+from capabilities import enforce_capability
+
 
 # Import types from structures.py
 from structures import CompanyPolicy, RepoInfo, CommitInfo, Issue, AgentState
@@ -130,9 +133,9 @@ def log_state_transition(from_agent, to_agent, state_summary=None):
         debug_print("State summary:", state_summary)
 
 # Initialize our LLM
-llm = ChatOpenAI(
-    model=config["model"]["name"],
-    api_key=config["model"].get("api_token", "")
+llm = ChatOllama(
+    model="llama3.1:latest",
+    temperature=0
 )
 
 if DEBUG_MODE:
@@ -226,7 +229,8 @@ def get_repo_content(org_name: str, repo_name: str, path: str = "") -> List[Dict
     
     return response.json()
 
-def get_file_content(file_url: str) -> Optional[str]:
+@enforce_capability("read_file")
+def get_file_content(file_url: str, agent_name: str = "unknown") -> Optional[str]:
     """Get content of a file from its URL"""
     try:
         response = requests.get(file_url, headers=get_git_headers())
@@ -305,7 +309,8 @@ def get_commit_details(org_name: str, repo_name: str, commit_sha: str) -> Option
         "timestamp": commit_data["commit"]["author"]["date"]
     }
 
-def create_pull_request(org_name: str, repo_name: str, base_branch: str, head_branch: str, title: str, body: str) -> bool:
+@enforce_capability("merge_to_main")
+def create_pull_request(org_name: str, repo_name: str, base_branch: str, head_branch: str, title: str, body: str, agent_name: str = "unknown") -> bool:
     """Create a pull request with the fixes using GitHub CLI"""
     import subprocess
     import tempfile
@@ -380,8 +385,9 @@ def create_pull_request(org_name: str, repo_name: str, base_branch: str, head_br
         if os.path.exists(body_file_path):
             os.unlink(body_file_path)
 
+@enforce_capability("create_branch")
 def create_branch_and_commit(org_name: str, repo_name: str, base_ref: str, branch_name: str, 
-                            files_to_update: List[Dict[str, str]], commit_message: str) -> bool:
+                            files_to_update: List[Dict[str, str]], commit_message: str, agent_name: str = "unknown") -> bool:
     """Create a new branch and commit the fixed files using git commands"""
     import subprocess
     import os
@@ -582,7 +588,7 @@ def create_branch_and_commit(org_name: str, repo_name: str, base_ref: str, branc
     return True
 
 # Get and analyze a sample of files from a repository
-def sample_repo_files(org_name: str, repo_name: str, max_files: int = 10) -> List[Dict[str, str]]:
+def sample_repo_files(org_name: str, repo_name: str, max_files: int = 10, agent_name: str = "unknown") -> List[Dict[str, str]]:
     """Get a sample of files from a repository for analysis"""
     files_to_analyze = []
     
@@ -602,7 +608,7 @@ def sample_repo_files(org_name: str, repo_name: str, max_files: int = 10) -> Lis
                 continue
                 
             # Get file content
-            content = get_file_content(item["download_url"])
+            content = get_file_content(item["download_url"], agent_name=agent_name)
             if content:
                 files_to_analyze.append({item["path"]: content})
     
@@ -844,7 +850,7 @@ def code_review_agent(state: AgentState) -> Dict[str, Union[str, List[Any]]]:
                 debug_print(f"Error: Local repository {repo_name} has no path specified")
                 files_to_analyze = []
         else:
-            files_to_analyze = sample_repo_files(GIT_ORG, repo_name)
+            files_to_analyze = sample_repo_files(GIT_ORG, repo_name, agent_name="code_review_agent")
         
         if not files_to_analyze:
             print(f"No suitable files found in repository {repo_name}")
@@ -894,7 +900,7 @@ Example description format:
 
 IMPORTANT DECISION POINT: At the end of your response, indicate ONLY if you are CERTAIN there are significant issues in the codebase that you couldn't identify in this pass. Be extremely selective and conservative - only request further analysis if you encountered clear signs of additional serious issues that you couldn't fully capture this time. Use the following format:
 
-CONTINUE_ANALYSIS: [YES/NO] 
+CONTINUE_ANALYSIS: NO 
 REASON: [Specific evidence of additional serious issues that weren't fully captured]
 
 Note that answering YES will trigger another analysis pass, so only do this if absolutely necessary.
@@ -1403,7 +1409,8 @@ BRANCH_SUFFIX: [Your branch name suffix here]
             "main",  # Assume main is the base branch
             branch_name,
             fixed_files,
-            final_commit_message
+            final_commit_message,
+            agent_name="commit_agent"
         )
         
         if commit_success:
