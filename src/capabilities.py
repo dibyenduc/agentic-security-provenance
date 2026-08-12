@@ -1,5 +1,6 @@
 import functools
 from attestation import log_signed_action
+from mcp_sandbox import mcp_sandboxed_tool
 
 AGENT_CAPABILITIES = {
     "analysis_agent": {"read_repo_list", "read_metadata"},
@@ -8,6 +9,10 @@ AGENT_CAPABILITIES = {
     "commit_agent": {"create_branch", "merge_to_main"},
 }
 
+# Replace the old enforce_capability with an alias to the new Wasm sandbox wrapper
+enforce_capability = mcp_sandboxed_tool
+
+"""
 def enforce_capability(action_name):
     def decorator(func):
         @functools.wraps(func)
@@ -40,4 +45,4 @@ def enforce_capability(action_name):
             return func(*args, **kwargs)
         return wrapper
     return decorator
-
+"""
